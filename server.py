@@ -15,6 +15,7 @@ from PIL import Image as PILImage
 from utils.config_utils import get_verified_robot_spec_util, get_verified_robots_list_util
 from utils.map_utils import (
     draw_map_axes_util,
+    draw_robot_pose_util,
     get_map_info_list_util,
     get_map_info_util,
     write_map_location_util,
@@ -3112,6 +3113,52 @@ def draw_map_axes(
                 }
     """
     return draw_map_axes_util(map_message, line_thickness)
+
+
+@mcp.tool(
+    description=(
+        "Draw the robot's current position and heading on the map image as an orange arrow. "
+        "Requires the robot's world-frame pose (x, y, yaw) which can be obtained via "
+        "subscribe_once() on topics such as /amcl_pose (geometry_msgs/PoseWithCovarianceStamped) "
+        "or /robot_pose (geometry_msgs/PoseStamped). "
+        "Extract x and y from msg.pose.pose.position (or msg.pose.position), and convert the "
+        "quaternion (qx, qy, qz, qw) to yaw using: yaw = atan2(2*(qw*qz + qx*qy), 1 - 2*(qy^2 + qz^2)). "
+        "Loads received_map_overlay.png (axes already drawn) if available, otherwise received_map.png. "
+        "Saves the result as ./map/received_map_robot.png and returns it as an image. "
+        "Call draw_map_axes() before this tool so the coordinate axes are visible alongside the robot pose."
+    )
+)
+def draw_robot_pose(
+    map_message: Dict[str, Any],
+    robot_x: float,
+    robot_y: float,
+    robot_yaw: float,
+    arrow_length_m: float = 0.5,
+) -> Any:
+    """
+    Draw the robot's current position and heading on the map image.
+
+    Args:
+        map_message: OccupancyGrid message dict (or dict with 'msg' key) containing
+                     'info' with width, height, resolution, and origin.
+        robot_x: Robot X position in the map frame (meters).
+        robot_y: Robot Y position in the map frame (meters).
+        robot_yaw: Robot heading in radians (0 = facing +X axis).
+        arrow_length_m: Length of the heading arrow in meters. Default 0.5.
+
+    Returns:
+        The annotated map image as MCP ImageContent, or an error dict.
+    """
+    result = draw_robot_pose_util(map_message, robot_x, robot_y, robot_yaw, arrow_length_m)
+    if "error" in result:
+        return result
+
+    path = result["robot_map_path"]
+    if not os.path.exists(path):
+        return {"error": f"Robot map image not found at: {path}"}
+
+    img = PILImage.open(path)
+    return _encode_image_to_imagecontent(img)
 
 
 @mcp.tool(

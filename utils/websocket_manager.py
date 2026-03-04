@@ -140,6 +140,11 @@ def parse_map(parsed_data: dict) -> dict | None:
     Convert a nav_msgs/OccupancyGrid message (already parsed as JSON)
     into a PNG image and update the message to reference the image path.
 
+    Post-processing:
+    1. Flood fill from edges to distinguish exterior unknown from interior.
+    2. Remove interior unknown clusters surrounded only by free space
+       (no adjacent walls), converting them to free.
+
     Args:
         parsed_data (dict): Parsed JSON from rosbridge.
 
@@ -149,6 +154,8 @@ def parse_map(parsed_data: dict) -> dict | None:
             - 'msg.map_image_path' set
             or None if conversion failed.
     """
+    from collections import deque
+
     # Extract the inner message
     msg = parsed_data.get("msg", {})
     info = msg.get("info", {})
@@ -175,15 +182,64 @@ def parse_map(parsed_data: dict) -> dict | None:
     grid = grid.reshape((height, width))
 
     # Map occupancy values to grayscale:
-    # -1 (unknown)   → 127
-    # 0 (free)       → 255
-    # 100 (occupied) → 0
+    # -1  (unknown)       → 127  (mid gray)
+    # 0   (free)          → 255  (white)
+    # 1~100 (occupied)    → 252~0 (near white to black)
     img = np.zeros_like(grid, dtype=np.uint8)
     img[grid == -1] = 127
     img[grid == 0] = 255
-    img[grid == 100] = 0
+    occupied_mask = (grid >= 1) & (grid <= 100)
+    img[occupied_mask] = np.round(255 * (1.0 - grid[occupied_mask] / 100.0)).astype(np.uint8)
 
     img = cv2.flip(img, 0)
+
+    # --- Post-processing: clean up unknown regions ---
+    h, w = img.shape
+    UNKNOWN_VAL = 127
+    FREE_VAL = 255
+
+    # 1) Flood fill from edges to mark exterior unknown
+    exterior = np.zeros((h, w), dtype=bool)
+    queue = deque()
+    for x in range(w):
+        if img[0, x] == UNKNOWN_VAL and not exterior[0, x]:
+            queue.append((0, x)); exterior[0, x] = True
+        if img[h-1, x] == UNKNOWN_VAL and not exterior[h-1, x]:
+            queue.append((h-1, x)); exterior[h-1, x] = True
+    for y in range(h):
+        if img[y, 0] == UNKNOWN_VAL and not exterior[y, 0]:
+            queue.append((y, 0)); exterior[y, 0] = True
+        if img[y, w-1] == UNKNOWN_VAL and not exterior[y, w-1]:
+            queue.append((y, w-1)); exterior[y, w-1] = True
+    while queue:
+        cy, cx = queue.popleft()
+        for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            ny, nx = cy + dy, cx + dx
+            if 0 <= ny < h and 0 <= nx < w and not exterior[ny, nx] and img[ny, nx] == UNKNOWN_VAL:
+                exterior[ny, nx] = True
+                queue.append((ny, nx))
+
+    # Paint exterior with darker gray
+    img[exterior] = 80
+
+    # 2) Find interior unknown clusters surrounded only by free space (no walls)
+    #    These are SLAM update artifacts that should be free space.
+    interior_unknown = ((img == UNKNOWN_VAL) & ~exterior).astype(np.uint8)
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(interior_unknown, connectivity=8)
+
+    free_map = (img == FREE_VAL)
+    wall_map = (img <= 50)  # occupied pixels (dark)
+    kern = np.ones((3, 3), np.uint8)
+
+    for i in range(1, num_labels):
+        cluster = (labels == i).astype(np.uint8)
+        border = cv2.dilate(cluster, kern, iterations=1).astype(bool) & ~cluster.astype(bool)
+        has_free = (border & free_map).any()
+        has_wall = (border & wall_map).any()
+        if has_free and not has_wall:
+            img[labels == i] = FREE_VAL
+
+    # --- End post-processing ---
 
     # Ensure output directory exists
     os.makedirs("./map", exist_ok=True)
@@ -197,9 +253,7 @@ def parse_map(parsed_data: dict) -> dict | None:
 
     print(f"[Map] Saved OccupancyGrid image at {map_path}", file=sys.stderr)
 
-    # Update the original parsed_data:
-    # - remove large data array
-    # - add image path
+    # Update the original parsed_data
     msg_copy = msg.copy()
     msg_copy.pop("data", None)
     msg_copy["map_image_path"] = map_path

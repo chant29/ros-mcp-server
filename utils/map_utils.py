@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 import cv2
+import numpy as np
 import yaml
 
 
@@ -182,6 +183,154 @@ def write_map_location_util(
 
     except Exception as e:
         return {"error": f"Failed to write semantic location: {str(e)}"}
+
+
+def draw_robot_pose_util(
+    map_message: Dict[str, Any],
+    robot_x: float,
+    robot_y: float,
+    robot_yaw: float,
+    arrow_length_m: float = 0.5,
+) -> Dict[str, Any]:
+    """
+    Draw the robot's current position and heading on the map image.
+
+    Loads received_map_overlay.png (axes already drawn) if it exists, otherwise
+    falls back to received_map.png.  Converts world-frame coordinates to pixel
+    coordinates and draws an orange filled circle at the robot's position and an
+    orange arrow indicating its heading.  The result is saved as
+    ./map/received_map_robot.png.
+
+    Args:
+        map_message (dict): OccupancyGrid message (or dict with a 'msg' key)
+            containing an 'info' sub-dict with width, height, resolution,
+            and origin.
+        robot_x (float): Robot X position in the map frame (meters).
+        robot_y (float): Robot Y position in the map frame (meters).
+        robot_yaw (float): Robot heading in radians (0 = facing +X axis).
+        arrow_length_m (float): Heading arrow length in meters. Default 0.5.
+
+    Returns:
+        dict: On success:
+            {
+                "robot_map_path": str,
+                "robot_world_position": {"x": float, "y": float, "yaw_rad": float},
+                "pixel_position": {"col": int, "row": int},
+                "source_image": str,
+                "message": str,
+            }
+            On failure: {"error": str}
+    """
+    try:
+        msg = map_message.get("msg", map_message)
+        info = msg.get("info", {})
+
+        height = info.get("height")
+        resolution = info.get("resolution")
+        origin_pos = info.get("origin", {}).get("position", {})
+
+        if height is None or resolution is None:
+            return {"error": "Missing height or resolution in map metadata."}
+
+        height = int(height)
+        resolution = float(resolution)
+        origin_x = float(origin_pos.get("x", 0.0))
+        origin_y = float(origin_pos.get("y", 0.0))
+
+        # Load the best available map image.
+        overlay_path = os.path.join("./map", "received_map_overlay.png")
+        base_path = os.path.join("./map", "received_map.png")
+
+        if os.path.exists(overlay_path):
+            img = cv2.imread(overlay_path, cv2.IMREAD_COLOR)
+            source_path = overlay_path
+        elif os.path.exists(base_path):
+            img = cv2.imread(base_path, cv2.IMREAD_COLOR)
+            source_path = base_path
+        else:
+            return {"error": "No map image found. Call analyze_previously_received_map first."}
+
+        if img is None:
+            return {"error": f"Failed to load map image from: {source_path}"}
+
+        # Ensure the image is BGR (parse_map saves grayscale PNG).
+        if len(img.shape) == 2:
+            img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+
+        img_h, img_w = img.shape[:2]
+
+        # World → pixel (no rotation applied).
+        #   col = (rx - origin_x) / resolution       (increases rightward)
+        #   row = H - (ry - origin_y) / resolution   (increases downward; Y flipped)
+        robot_col = int(round((robot_x - origin_x) / resolution))
+        robot_row = int(round(float(height) - (robot_y - origin_y) / resolution))
+        robot_col = max(0, min(img_w - 1, robot_col))
+        robot_row = max(0, min(img_h - 1, robot_row))
+
+        # Build a filled arrow polygon in the robot's local frame.
+        #
+        # Local axes:  lx = robot forward,  ly = robot left
+        # Image mapping from local offset (lx, ly):
+        #   Δcol =  lx*cos(yaw) - ly*sin(yaw)
+        #   Δrow = -(lx*sin(yaw) + ly*cos(yaw))
+        #
+        # Arrow shape (lx forward, ly left), scaled by S pixels:
+        #
+        #         tip
+        #          *
+        #         /|\
+        #        / | \
+        #  L-sh *  |  * R-sh   ← arrowhead (wide)
+        #        \  |  /
+        #    L-b  * | * R-b    ← body shoulders
+        #         | | |
+        #    L-r  *   * R-r    ← rear
+        #
+        S = float(max(int(arrow_length_m / resolution), 12))
+        local_pts = np.array(
+            [
+                [ 1.0,  0.0],  # tip (front)
+                [-0.6,  0.6],  # rear-left
+                [-0.2,  0.0],  # rear notch
+                [-0.6, -0.6],  # rear-right
+            ],
+            dtype=np.float64,
+        ) * S
+
+        cos_a = math.cos(robot_yaw)
+        sin_a = math.sin(robot_yaw)
+        pixel_pts = []
+        for lx, ly in local_pts:
+            dc = lx * cos_a - ly * sin_a
+            dr = -(lx * sin_a + ly * cos_a)
+            pixel_pts.append([robot_col + int(round(dc)), robot_row + int(round(dr))])
+
+        pts = np.array(pixel_pts, dtype=np.int32).reshape((-1, 1, 2))
+
+        # Filled orange arrow with a dark outline for contrast.
+        cv2.fillPoly(img, [pts], color=(0, 165, 255))       # BGR orange fill
+        cv2.polylines(img, [pts], isClosed=True, color=(0, 80, 180), thickness=1)  # outline
+
+        robot_map_path = os.path.join("./map", "received_map_robot.png")
+        os.makedirs("./map", exist_ok=True)
+        success = cv2.imwrite(robot_map_path, img)
+        if not success:
+            return {"error": f"Failed to save robot map image at: {robot_map_path}"}
+
+        return {
+            "robot_map_path": robot_map_path,
+            "robot_world_position": {
+                "x": robot_x,
+                "y": robot_y,
+                "yaw_rad": robot_yaw,
+            },
+            "pixel_position": {"col": robot_col, "row": robot_row},
+            "source_image": source_path,
+            "message": "Robot pose drawn successfully on the map.",
+        }
+
+    except Exception as e:
+        return {"error": f"Exception while drawing robot pose: {e}"}
 
 
 def draw_map_axes_util(
