@@ -21,7 +21,7 @@ from utils.map_utils import (
     write_map_location_util,
 )
 from utils.network_utils import ping_ip_and_port
-from utils.websocket_manager import WebSocketManager, parse_input
+from utils.websocket_manager import WebSocketManager, parse_input, parse_map
 
 # ROS bridge connection settings
 ROSBRIDGE_IP = "127.0.0.1"  # Default is localhost. Replace with your local IPor set using the LLM.
@@ -656,6 +656,112 @@ def subscribe_once(
         ws_manager.send(unsubscribe_msg)
         return {"error": "Timeout waiting for message from topic"}
 
+@mcp.tool(
+    description=(
+        "Subscribe to a ROS map topic and return the first OccupancyGrid message received.\n"
+        "The OccupancyGrid data is converted into a PNG image on the server, and the large 'msg.data' field "
+        "is removed from the returned message. The saved image path is returned as 'msg.map_image_path'.\n"
+        "\n"
+        "This tool only supports nav_msgs/OccupancyGrid topics.\n"
+        "\n"
+        "Example:\n"
+        "subscribe_map(topic='/map', msg_type='nav_msgs/OccupancyGrid')\n"
+        "subscribe_map(topic='/slam_map', msg_type='nav_msgs/OccupancyGrid', timeout=None)  # Use timeout=None if the map publishes infrequently\n"
+        "subscribe_map(topic='/map', msg_type='nav_msgs/OccupancyGrid', queue_length=1)  # Limit buffering if the map updates frequently\n"
+        "subscribe_map(topic='/map_updates', msg_type='nav_msgs/OccupancyGrid', throttle_rate_ms=500)  # Reduce map update rate"
+    )
+)
+def subscribe_map_as_image(
+    topic: str = "",
+    msg_type: str = "",
+    timeout: float = ws_manager.default_timeout,
+    queue_length: int | None = None,
+    throttle_rate_ms: int | None = None,
+) -> dict:
+    """
+    Subscribe to a ROS topic via rosbridge and wait for one OccupancyGrid message.
+    If received successfully, convert the map to PNG via parse_map() and return
+    the updated message without the large 'data' field.
+
+    Args:
+        topic (str): ROS topic name (e.g. "/map")
+        msg_type (str): ROS message type. Must be nav_msgs/OccupancyGrid.
+        timeout (float | None): Timeout in seconds. If None, uses default timeout.
+        queue_length (int | None): rosbridge queue_length, must be >= 1
+        throttle_rate_ms (int | None): rosbridge throttle_rate in ms, must be >= 0
+
+    Returns:
+        dict:
+            - {"msg": <parsed map message>, "message": "..."} on success
+            - {"error": "<error message>"} on failure
+    """
+    # 1. Required args
+    if not topic or not msg_type:
+        return {"error": "Missing required arguments: topic and msg_type must be provided."}
+
+    # 2. Enforce OccupancyGrid-only behavior
+    if not msg_type.endswith("OccupancyGrid"):
+        return {
+            "error": (
+                "subscribe_map only supports OccupancyGrid messages. "
+                f"Received msg_type={msg_type}"
+            )
+        }
+
+    # 3. Validate optional params
+    if queue_length is not None and (not isinstance(queue_length, int) or queue_length < 1):
+        return {"error": "queue_length must be an integer ≥ 1"}
+
+    if throttle_rate_ms is not None and (
+        not isinstance(throttle_rate_ms, int) or throttle_rate_ms < 0
+    ):
+        return {"error": "throttle_rate_ms must be an integer ≥ 0"}
+
+    # 4. Build subscribe message
+    subscribe_msg: dict = {
+        "op": "subscribe",
+        "topic": topic,
+        "type": msg_type,
+    }
+
+    if queue_length is not None:
+        subscribe_msg["queue_length"] = queue_length
+
+    if throttle_rate_ms is not None:
+        subscribe_msg["throttle_rate"] = throttle_rate_ms
+
+    # 5. Subscribe and wait
+    with ws_manager:
+        send_error = ws_manager.send(subscribe_msg)
+        if send_error:
+            return {"error": f"Failed to subscribe: {send_error}"}
+
+        actual_timeout = timeout if timeout is not None else ws_manager.default_timeout
+        end_time = time.time() + actual_timeout
+
+        try:
+            while time.time() < end_time:
+                response = ws_manager.receive(timeout=0.5)
+                if response is None:
+                    continue
+
+                mapped = parse_map(response)
+                if mapped is None:
+                    continue
+
+                if "error" in mapped:
+                    return mapped
+
+                return {
+                    "msg": mapped.get("msg", {}),
+                    "message": "Map received successfully and saved as PNG in the MCP server.",
+                }
+
+            return {"error": "Timeout waiting for OccupancyGrid message from topic"}
+
+        finally:
+            unsubscribe_msg = {"op": "unsubscribe", "topic": topic}
+            ws_manager.send(unsubscribe_msg)
 
 @mcp.tool(
     description=(
@@ -2991,6 +3097,22 @@ def _encode_image_to_imagecontent(image):
     img_obj = Image(data=img_bytes, format="jpeg")
     return img_obj.to_image_content()
 
+def _encode_image_to_map(image):
+    """
+    Encodes a PIL Image to a format compatible with ImageContent.
+
+    Args:
+        image (PIL.Image.Image): The image to encode.
+
+    Returns:
+        ImageContent: PNG-encoded image wrapped in an ImageContent object.
+    """
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    img_bytes = buffer.getvalue()
+    img_obj = Image(data=img_bytes, format="png")
+    return img_obj.to_image_content()
+
 
 @mcp.tool(
     description=(
@@ -3019,8 +3141,12 @@ def analyze_previously_received_image():
     if not os.path.exists(path):
         return {"error": "No image found at ./camera/received_image.jpeg"}
     img = PILImage.open(path)
+    
+    #paste image backup file
+    annotated_path = "./camera/" + str(int(time.time())) + "_annotated_image.jpeg"
+    img.save(annotated_path)
+    
     return _encode_image_to_imagecontent(img)
-
 
 def parse_arguments():
     """Parse command line arguments for MCP server configuration."""
@@ -3065,7 +3191,7 @@ Examples:
 ## ############################################################################################## ##
 @mcp.tool(
     description=(
-        "Draw coordinate axes on a previously saved OccupancyGrid map image. "
+        "Draw coordinate axes on a previously saved OccupancyGrid map image obtained via subscribe_map_as_image(). "
         "The tool uses the map metadata (width, height, resolution, origin) and the "
         "image path to overlay +X and +Y axes starting from the world origin position (0,0) "
         "in image coordinates, then saves and returns the path to the annotated image."
@@ -3118,14 +3244,15 @@ def draw_map_axes(
 @mcp.tool(
     description=(
         "Draw the robot's current position and heading on the map image as an orange arrow. "
-        "Requires the robot's world-frame pose (x, y, yaw) which can be obtained via "
-        "subscribe_once() on topics such as /amcl_pose (geometry_msgs/PoseWithCovarianceStamped) "
+        "IMPORTANT: You MUST call draw_map_axes() before calling this tool. "
+        "draw_map_axes() generates the annotated overlay image (received_map_overlay.png) with coordinate axes and grid lines "
+        "that this tool loads as its base image. Skipping draw_map_axes() will result in a map without axes or grid. "
+        "The map_message should be obtained via subscribe_map_as_image(). "
+        "Requires the robot's world-frame pose (x, y, yaw) from topics such as /amcl_pose (geometry_msgs/PoseWithCovarianceStamped) "
         "or /robot_pose (geometry_msgs/PoseStamped). "
         "Extract x and y from msg.pose.pose.position (or msg.pose.position), and convert the "
         "quaternion (qx, qy, qz, qw) to yaw using: yaw = atan2(2*(qw*qz + qx*qy), 1 - 2*(qy^2 + qz^2)). "
-        "Loads received_map_overlay.png (axes already drawn) if available, otherwise received_map.png. "
-        "Saves the result as ./map/received_map_robot.png and returns it as an image. "
-        "Call draw_map_axes() before this tool so the coordinate axes are visible alongside the robot pose."
+        "Saves the result as ./map/received_map_robot.png and returns it as an image."
     )
 )
 def draw_robot_pose(
@@ -3158,16 +3285,23 @@ def draw_robot_pose(
         return {"error": f"Robot map image not found at: {path}"}
 
     img = PILImage.open(path)
-    return _encode_image_to_imagecontent(img)
+    
+    # save the annotated image to a new file for reference
+    annotated_path = "./map/" + str(int(time.time())) + "_annotated_map.png"
+    img.save(annotated_path)
+    
+    
+    return _encode_image_to_map(img)
 
 
 @mcp.tool(
     description=(
-        "Load specifications and usage context for a verified map information. "
-        "ONLY use if the map information is in the verified list (use get_verified_maps_list first to check). "
+        "Retrieve stored semantic data for a specific map, including labeled locations, "
+        "object observations, and contextual annotations collected during exploration. "
+        "ONLY use if the map is in the verified list (use get_verified_maps_list first to check). "
     )
 )
-def get_verified_maps_info(name: str) -> dict:
+def get_semantic_data(name: str) -> dict:
     """
     Load pre-defined specifications and additional context for a map information.
 
@@ -3195,8 +3329,9 @@ def get_verified_maps_info(name: str) -> dict:
 
 @mcp.tool(
     description=(
-        "List pre-verified maps information that have specification files with usage guidance available. "
-        "Use this to check if a map information has additional context available before calling get_verified_maps_info. "
+        "List pre-verified maps that have semantic data files available, including labeled locations "
+        "and observations collected during exploration. "
+        "Use this to check if a map has semantic data available before calling get_semantic_data. "
     )
 )
 def get_verified_maps_list() -> dict:
@@ -3213,12 +3348,14 @@ def get_verified_maps_list() -> dict:
 
 @mcp.tool(
     description=(
-        "Add or update a semantic location in a specific map YAML file under "
+        "Write or update semantic data for a specific location in a map YAML file under "
         "map_specifications (e.g., hospital.yaml, office.yaml). "
-        "Use this after determining the correct map name via get_verified_maps_info / get_verified_maps_list."
+        "Use this to record objects, observations, and contextual annotations collected at a waypoint. "
+        "If the map YAML file does not exist, it will be created automatically with the given map_name. "
+        "You can check existing maps via get_verified_maps_list, or provide a new map_name to create a new map file."
     )
 )
-def write_map_location(
+def write_semantic_data(
     map_name: str,
     name: str,
     description: str,
@@ -3227,10 +3364,11 @@ def write_map_location(
     yaw: float,
 ) -> dict:
     """
-    Add a new location to semantic_map.yaml or update an existing one
+    Write semantic data for a new location or update an existing entry
     if a location with the same name already exists.
 
     Args:
+        map_name (str): The map name corresponding to the YAML file in map_specifications.
         name (str): The semantic location name (e.g., 'AED').
         description (str): Description of the location.
         x (float): X coordinate.
@@ -3238,20 +3376,28 @@ def write_map_location(
         yaw (float): Orientation in radians.
 
     Returns:
-        dict: Status and the added/updated location info.
+        dict: Status and the added/updated semantic data entry.
     """
     return write_map_location_util(map_name, name, description, x, y, yaw)
 
 
 @mcp.tool(
     description=(
-        "Analyze a previously received occupancy grid map after it has been processed into a visual overlay image."
+        "Analyze a previously received occupancy grid map after it has been processed into a visual overlay image. "
         "Map data may come from nav_msgs/OccupancyGrid topics, services, or from subscribe_once() / subscribe_for_duration() operations. "
-        "Always applies draw_map_axes() to generate an annotated overlay with axes and grid lines."
-        "During analysis, treat the drawn axes as the true world-frame origin (0,0)."
-        "Use the grid spacing provided by draw_map_axes() and count grid cells accurately to convert pixel positions into precise real-world coordinates."
-        "Use this tool after receiving a map to inspect the processed overlay of the latest environment."
-        "In an OccupancyGrid map, white represents free navigable space, black represents obstacles like walls, and gray represents unexplored areas that should not be considered in the analysis."
+        "Always applies draw_map_axes() to generate an annotated overlay with axes and grid lines. "
+        "During analysis, treat the drawn axes as the true world-frame origin (0,0). "
+        "Use this tool after receiving a map to inspect the processed overlay of the latest environment. "
+        "In an OccupancyGrid map, white represents free navigable space, black represents obstacles like walls, and gray represents unexplored areas that should not be considered in the analysis. "
+        "IMPORTANT IMAGE ORIENTATION: The top of the map image corresponds to the positive Y direction and the bottom to the negative Y direction. "
+        "The right side corresponds to the positive X direction and the left side to the negative X direction. "
+        "When analyzing spatial relationships (e.g., 'the room at the top of the image'), always map 'top' to higher Y values and 'bottom' to lower Y values. "
+        "HOW TO READ COORDINATES FROM THE GRID: "
+        "1) Locate the origin (0,0) at the point where the red (+X) and green (+Y) axes meet. "
+        "2) Each grid line is spaced exactly 'grid_spacing_m' meters apart (provided by draw_map_axes). "
+        "3) To find a point's X coordinate: count grid lines horizontally from the origin (right = positive, left = negative), then multiply by grid_spacing_m. "
+        "4) To find a point's Y coordinate: count grid lines vertically from the origin (up = positive, down = negative), then multiply by grid_spacing_m. "
+        "5) For positions between grid lines, estimate the fraction (e.g., halfway between line 2 and 3 with spacing 1.0m = 2.5m)."
     )
 )
 def analyze_previously_received_map():
@@ -3290,7 +3436,7 @@ def analyze_previously_received_map():
     if not os.path.exists(path):
         return {"error": "No image found at ./map/received_map_overlay.png"}
     img = PILImage.open(path)
-    return _encode_image_to_imagecontent(img)
+    return _encode_image_to_map(img)
 
 
 def main():

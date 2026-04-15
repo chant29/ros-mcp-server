@@ -2,8 +2,9 @@ import math
 import os
 import sys
 from pathlib import Path
+import time
 from typing import Any, Dict
-
+import shutil
 import cv2
 import numpy as np
 import yaml
@@ -129,7 +130,10 @@ def write_map_location_util(
         map_file = specs_dir / f"{safe_map_name}.yaml"
 
         if not map_file.exists():
-            return {"error": f"Map file not found: {map_file}"}
+            map_file.write_text("locations: []\n", encoding="utf-8")
+            file_action = "created"
+        else:
+            file_action = "existing"
 
         # 3) Load existing YAML
         with map_file.open("r", encoding="utf-8") as f:
@@ -172,10 +176,19 @@ def write_map_location_util(
                 sort_keys=False,
                 allow_unicode=True,
             )
-
+            
+        # 8) 수정된 map_file 자체를 복사해서 백업 디렉토리에 넣기
+        backup_dir = specs_dir / "backups"
+        backup_dir.mkdir(exist_ok=True)
+        timestamp = time.strftime("%Y%m%d-%H%M%S")
+        backup_map_file = backup_dir / f"{safe_map_name}_{timestamp}.yaml"
+        shutil.copy2(map_file, backup_map_file)
+                
+        
         return {
             "status": "success",
             "action": action,
+            "file_action": file_action,
             "map_name": safe_map_name,
             "file": str(map_file),
             "location": new_location,

@@ -135,18 +135,20 @@ def parse_image(raw: Union[str, bytes] | None) -> dict | None:
     return _handle_raw_image(data_b64, height, width, encoding, msg, result)
 
 
-def parse_map(parsed_data: dict) -> dict | None:
+def parse_map(raw: str | bytes | None) -> dict | None:
     """
-    Convert a nav_msgs/OccupancyGrid message (already parsed as JSON)
-    into a PNG image and update the message to reference the image path.
+    Convert a rosbridge nav_msgs/OccupancyGrid message into a PNG image and
+    update the message to reference the saved image path.
 
-    Post-processing:
-    1. Flood fill from edges to distinguish exterior unknown from interior.
-    2. Remove interior unknown clusters surrounded only by free space
-       (no adjacent walls), converting them to free.
+    This function:
+    1. Parses raw JSON input
+    2. Validates OccupancyGrid fields
+    3. Converts map data into grayscale PNG
+    4. Removes large msg.data field
+    5. Adds msg.map_image_path
 
     Args:
-        parsed_data (dict): Parsed JSON from rosbridge.
+        raw: Raw rosbridge message as JSON string / bytes
 
     Returns:
         dict | None: Updated parsed_data with:
@@ -156,14 +158,22 @@ def parse_map(parsed_data: dict) -> dict | None:
     """
     from collections import deque
 
-    # Extract the inner message
+    # 1. Parse JSON here
+    if raw is None:
+        return None
+
+    parsed_data = parse_json(raw)
+    if parsed_data is None:
+        return None
+
+    # 2. Extract the inner message
     msg = parsed_data.get("msg", {})
     info = msg.get("info", {})
     width = info.get("width")
     height = info.get("height")
     data = msg.get("data")
 
-    # Validate OccupancyGrid fields
+    # 3. Validate OccupancyGrid fields
     if width is None or height is None or data is None:
         print("[Map] Missing width, height, or data in OccupancyGrid.", file=sys.stderr)
         return None
@@ -172,7 +182,7 @@ def parse_map(parsed_data: dict) -> dict | None:
         print("[Map] OccupancyGrid data is not a list.", file=sys.stderr)
         return None
 
-    # Convert list to numpy array and reshape
+    # 4. Convert list to numpy array and reshape
     grid = np.array(data, dtype=np.int16)
     expected_size = int(width) * int(height)
     if grid.size != expected_size:
@@ -181,10 +191,7 @@ def parse_map(parsed_data: dict) -> dict | None:
 
     grid = grid.reshape((height, width))
 
-    # Map occupancy values to grayscale:
-    # -1  (unknown)       → 127  (mid gray)
-    # 0   (free)          → 255  (white)
-    # 1~100 (occupied)    → 252~0 (near white to black)
+    # 5. Map occupancy values to grayscale
     img = np.zeros_like(grid, dtype=np.uint8)
     img[grid == -1] = 127
     img[grid == 0] = 255
@@ -222,22 +229,22 @@ def parse_map(parsed_data: dict) -> dict | None:
     # Paint exterior with darker gray
     img[exterior] = 80
 
-    # 2) Find interior unknown clusters surrounded only by free space (no walls)
-    #    These are SLAM update artifacts that should be free space.
-    interior_unknown = ((img == UNKNOWN_VAL) & ~exterior).astype(np.uint8)
-    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(interior_unknown, connectivity=8)
+    # # 2) Find interior unknown clusters surrounded only by free space (no walls)
+    # #    These are SLAM update artifacts that should be free space.
+    # interior_unknown = ((img == UNKNOWN_VAL) & ~exterior).astype(np.uint8)
+    # num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(interior_unknown, connectivity=8)
 
-    free_map = (img == FREE_VAL)
-    wall_map = (img <= 50)  # occupied pixels (dark)
-    kern = np.ones((3, 3), np.uint8)
+    # free_map = (img == FREE_VAL)
+    # wall_map = (img <= 50)  # occupied pixels (dark)
+    # kern = np.ones((3, 3), np.uint8)
 
-    for i in range(1, num_labels):
-        cluster = (labels == i).astype(np.uint8)
-        border = cv2.dilate(cluster, kern, iterations=1).astype(bool) & ~cluster.astype(bool)
-        has_free = (border & free_map).any()
-        has_wall = (border & wall_map).any()
-        if has_free and not has_wall:
-            img[labels == i] = FREE_VAL
+    # for i in range(1, num_labels):
+    #     cluster = (labels == i).astype(np.uint8)
+    #     border = cv2.dilate(cluster, kern, iterations=1).astype(bool) & ~cluster.astype(bool)
+    #     has_free = (border & free_map).any()
+    #     has_wall = (border & wall_map).any()
+    #     if has_free and not has_wall:
+    #         img[labels == i] = FREE_VAL
 
     # --- End post-processing ---
 

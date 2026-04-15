@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__ros-mcp-server__get_action_status",
+      "mcp__ros-mcp-server__get_verified_robots_list"
+    ]
+  }
+}

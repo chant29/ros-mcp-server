@@ -1,0 +1,165 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1776219738495,
+  "projectRoot": "/home/harcolab/ros-mcp-server",
+  "techStack": {
+    "languages": [
+      {
+        "name": "Python",
+        "version": null,
+        "confidence": "high",
+        "markers": [
+          "pyproject.toml"
+        ]
+      }
+    ],
+    "frameworks": [
+      {
+        "name": "pytest",
+        "version": null,
+        "category": "testing"
+      }
+    ],
+    "packageManager": null,
+    "runtime": null
+  },
+  "build": {
+    "buildCommand": null,
+    "testCommand": "pytest",
+    "lintCommand": "ruff check",
+    "devCommand": null,
+    "scripts": {}
+  },
+  "conventions": {
+    "namingStyle": null,
+    "importStyle": null,
+    "testPattern": null,
+    "fileOrganization": null
+  },
+  "structure": {
+    "isMonorepo": false,
+    "workspaces": [],
+    "mainDirectories": [
+      "docs",
+      "examples"
+    ],
+    "gitBranches": {
+      "defaultBranch": "main",
+      "branchingStrategy": null
+    }
+  },
+  "customNotes": [],
+  "directoryMap": {
+    "camera": {
+      "path": "camera",
+      "purpose": null,
+      "fileCount": 0,
+      "lastAccessed": 1776219738493,
+      "keyFiles": []
+    },
+    "config": {
+      "path": "config",
+      "purpose": "Configuration files",
+      "fileCount": 2,
+      "lastAccessed": 1776219738493,
+      "keyFiles": [
+        "__init__.py",
+        "mcp.json"
+      ]
+    },
+    "docs": {
+      "path": "docs",
+      "purpose": "Documentation",
+      "fileCount": 6,
+      "lastAccessed": 1776219738494,
+      "keyFiles": [
+        "contributing.md",
+        "governance.md",
+        "installation-alternatives.md",
+        "installation-from-source.md",
+        "installation.md"
+      ]
+    },
+    "examples": {
+      "path": "examples",
+      "purpose": "Example code",
+      "fileCount": 0,
+      "lastAccessed": 1776219738494,
+      "keyFiles": []
+    },
+    "launch": {
+      "path": "launch",
+      "purpose": null,
+      "fileCount": 3,
+      "lastAccessed": 1776219738494,
+      "keyFiles": [
+        "launch_mcp_server.sh",
+        "launch_mcp_tunnel.sh",
+        "launch_rosbridge.launch.py"
+      ]
+    },
+    "map": {
+      "path": "map",
+      "purpose": null,
+      "fileCount": 4,
+      "lastAccessed": 1776219738494,
+      "keyFiles": [
+        "1774769687_annotated_map.png",
+        "received_map.png",
+        "received_map_overlay.png",
+        "received_map_robot.png"
+      ]
+    },
+    "map_specifications": {
+      "path": "map_specifications",
+      "purpose": null,
+      "fileCount": 2,
+      "lastAccessed": 1776219738494,
+      "keyFiles": [
+        "YOUR_MAP_NAME.yaml",
+        "carter.yaml"
+      ]
+    },
+    "robot_specifications": {
+      "path": "robot_specifications",
+      "purpose": null,
+      "fileCount": 6,
+      "lastAccessed": 1776219738494,
+      "keyFiles": [
+        "YOUR_ROBOT_NAME.yaml",
+        "__init__.py",
+        "carter.yaml",
+        "local_rosbridge.yaml",
+        "roman.yaml"
+      ]
+    },
+    "ros_mcp.egg-info": {
+      "path": "ros_mcp.egg-info",
+      "purpose": null,
+      "fileCount": 6,
+      "lastAccessed": 1776219738494,
+      "keyFiles": [
+        "PKG-INFO",
+        "SOURCES.txt",
+        "dependency_links.txt",
+        "entry_points.txt",
+        "requires.txt"
+      ]
+    },
+    "utils": {
+      "path": "utils",
+      "purpose": "Utility functions",
+      "fileCount": 5,
+      "lastAccessed": 1776219738494,
+      "keyFiles": [
+        "__init__.py",
+        "config_utils.py",
+        "map_utils.py",
+        "network_utils.py",
+        "websocket_manager.py"
+      ]
+    }
+  },
+  "hotPaths": [],
+  "userDirectives": []
+}
