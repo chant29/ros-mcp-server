@@ -200,34 +200,34 @@ def parse_map(raw: str | bytes | None) -> dict | None:
 
     img = cv2.flip(img, 0)
 
-    # --- Post-processing: clean up unknown regions ---
-    h, w = img.shape
-    UNKNOWN_VAL = 127
-    FREE_VAL = 255
+    # # --- Post-processing: clean up unknown regions ---
+    # h, w = img.shape
+    # UNKNOWN_VAL = 127
+    # FREE_VAL = 255
 
-    # 1) Flood fill from edges to mark exterior unknown
-    exterior = np.zeros((h, w), dtype=bool)
-    queue = deque()
-    for x in range(w):
-        if img[0, x] == UNKNOWN_VAL and not exterior[0, x]:
-            queue.append((0, x)); exterior[0, x] = True
-        if img[h-1, x] == UNKNOWN_VAL and not exterior[h-1, x]:
-            queue.append((h-1, x)); exterior[h-1, x] = True
-    for y in range(h):
-        if img[y, 0] == UNKNOWN_VAL and not exterior[y, 0]:
-            queue.append((y, 0)); exterior[y, 0] = True
-        if img[y, w-1] == UNKNOWN_VAL and not exterior[y, w-1]:
-            queue.append((y, w-1)); exterior[y, w-1] = True
-    while queue:
-        cy, cx = queue.popleft()
-        for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1)):
-            ny, nx = cy + dy, cx + dx
-            if 0 <= ny < h and 0 <= nx < w and not exterior[ny, nx] and img[ny, nx] == UNKNOWN_VAL:
-                exterior[ny, nx] = True
-                queue.append((ny, nx))
+    # # 1) Flood fill from edges to mark exterior unknown
+    # exterior = np.zeros((h, w), dtype=bool)
+    # queue = deque()
+    # for x in range(w):
+    #     if img[0, x] == UNKNOWN_VAL and not exterior[0, x]:
+    #         queue.append((0, x)); exterior[0, x] = True
+    #     if img[h-1, x] == UNKNOWN_VAL and not exterior[h-1, x]:
+    #         queue.append((h-1, x)); exterior[h-1, x] = True
+    # for y in range(h):
+    #     if img[y, 0] == UNKNOWN_VAL and not exterior[y, 0]:
+    #         queue.append((y, 0)); exterior[y, 0] = True
+    #     if img[y, w-1] == UNKNOWN_VAL and not exterior[y, w-1]:
+    #         queue.append((y, w-1)); exterior[y, w-1] = True
+    # while queue:
+    #     cy, cx = queue.popleft()
+    #     for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+    #         ny, nx = cy + dy, cx + dx
+    #         if 0 <= ny < h and 0 <= nx < w and not exterior[ny, nx] and img[ny, nx] == UNKNOWN_VAL:
+    #             exterior[ny, nx] = True
+    #             queue.append((ny, nx))
 
-    # Paint exterior with darker gray
-    img[exterior] = 80
+    # # Paint exterior with darker gray
+    # img[exterior] = 90
 
     # # 2) Find interior unknown clusters surrounded only by free space (no walls)
     # #    These are SLAM update artifacts that should be free space.
@@ -511,13 +511,19 @@ class WebSocketManager:
 
             return "[WebSocket] Not connected, send aborted."
 
-    def receive(self, timeout: float | None = None) -> Union[str, bytes] | None:
+    def receive(
+        self, timeout: float | None = None, close_on_timeout: bool = True
+    ) -> Union[str, bytes] | None:
         """
         Receive a single message from rosbridge within the given timeout.
 
         Args:
             timeout (float | None): Seconds to wait before timing out.
                                      If None, uses the default timeout.
+            close_on_timeout (bool): Whether an idle receive timeout should close the
+                                     WebSocket. Service-style request/response calls
+                                     keep the old behavior; subscription loops keep
+                                     the connection open between short polls.
 
         Returns:
             str | None: JSON string received from rosbridge, or None if timeout/error.
@@ -533,6 +539,11 @@ class WebSocketManager:
                     self.ws.settimeout(actual_timeout)
                     raw = self.ws.recv()  # rosbridge sends JSON as a string
                     return raw
+                except websocket.WebSocketTimeoutException as e:
+                    print(f"[WebSocket] Receive timeout: {e}", file=sys.stderr)
+                    if close_on_timeout:
+                        self.close()
+                    return None
                 except Exception as e:
                     print(f"[WebSocket] Receive error or timeout: {e}", file=sys.stderr)
                     self.close()

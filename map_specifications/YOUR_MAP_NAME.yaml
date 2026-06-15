@@ -1,20 +1,51 @@
-# Semantic Map Template
-# This file defines the semantic information of the environment so that the robot can recognize important locations and navigate between them.
-
-# - locations: A list of key points that the robot should be aware of
-#     · name: Name of the location
-#     · description: Brief description of the location
-#     · pose: Position and orientation within the map frame
-#         - x, y: 2D position in the map coordinate system
-#         - yaw: Orientation in radians (0 points along the positive X-axis)
-
-name: YOUR_MAP_NAME
-alias: YOUR_MAP_ALIAS # Optional alias for easier reference
-type: 2D_OccupancyGrid # Map format (e.g., 2D_OccupancyGrid)
+name: your_map_name
+alias: your_map_name
+type: 2D_OccupancyGrid
+semantic_threshold: 0.8
+reliability_policy:
+  minimum_confidence: 0.8
+  threshold_meaning: Include a visual landmark or map feature only when the estimated
+    confidence that it is stable, recognizable, and useful for place recognition is
+    at least 0.8.
+  semantic_fields:
+    safety_landmarks: Reliable safety-related landmarks, signs, equipment, warnings,
+      or safety markings.
+    functional_landmarks: Reliable task- or activity-related physical landmarks, such
+      as desks, counters, workstations, racks, machines, fixed equipment, or service
+      fixtures.
+    spatial_features: Reliable spatial, geometric, architectural, or area-level features,
+      such as rooms, corridors, walls, corners, zones, openings, and obstacle layouts.
+    low_reliability_observations: Visible physical objects that were not selected
+      as reliable landmarks because they can move, disappear, or be replaced.
+  stable_landmark_rules:
+  - Include landmarks that are physically fixed or normally remain in the same place
+    over time.
+  - Include architectural or infrastructure features such as walls, doors, windows,
+    corners, columns, signs, panels, counters, handrails, switches, and mounted equipment.
+  - Include landmarks that help distinguish this location from nearby locations.
+  - Include landmarks that are consistent with the map geometry, such as room shape,
+    corridor direction, entrances, exits, obstacles, and boundary lines.
+  - Include groups or zones only when the area has a stable purpose, such as a reception
+    desk, bed area, storage zone, kitchen counter, charging station, or workstation.
+  movability_policy:
+  - Treat movable objects as low reliability because they can disappear, move, or
+    be replaced.
+  - Use movable objects only when they are large, repeatedly observed, and define
+    a stable functional area.
+  - Do not rely on small, temporary, personal, or loose objects for place recognition.
+  low_reliability_by_default:
+  - loose or temporary items
+  - movable furniture, carts, chairs, bins, boxes, bags, and personal belongings
+  - portable equipment or containers that may be relocated
+  - inventory or supplies that can be added, removed, or rearranged
 locations:
-  - name: Origin
-    description: Origin of your map
-    pose:
-      x: 0.0
-      y: 0.0
-      yaw: 0.0
+- name: 'location_name'
+  description: description of the location, visible objects, and area type
+  pose:
+    x: 0.0
+    y: 0.0
+    yaw: 0.0
+  safety_landmarks: [] #reliable safety
+  functional_landmarks: [] #reliable task- or activity-related physical landmarks
+  spatial_features: [] #reliable spatial, geometric, architectural, or area-level features
+  low_reliability_observations: [] #visible physical objects that were not selected as reliable landmarks because they can move, disappear, or be replaced
